@@ -4,14 +4,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/book_model.dart';
+import '../models/book_reading_progress.dart';
+import '../services/reading_progress_service.dart';
 import '../services/book_scanner_service.dart';
+import 'book_reader_screen.dart';
 
 enum _LibraryFilter { all, books, comics }
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key, this.scannerService});
+  const LibraryScreen({
+    super.key,
+    this.scannerService,
+    this.progressStore,
+  });
 
   final BookScannerService? scannerService;
+  final ReadingProgressStore? progressStore;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -19,7 +27,9 @@ class LibraryScreen extends StatefulWidget {
 
 class _LibraryScreenState extends State<LibraryScreen> {
   late final BookScannerService _scannerService;
+  late final ReadingProgressStore _progressStore;
   List<BookModel> _books = [];
+  final _readingProgress = <String, BookReadingProgress>{};
   _LibraryFilter _filter = _LibraryFilter.all;
   String _query = '';
   String? _errorMessage;
@@ -29,6 +39,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   void initState() {
     super.initState();
     _scannerService = widget.scannerService ?? BookScannerService();
+    _progressStore =
+        widget.progressStore ?? SharedPreferencesReadingProgressStore();
   }
 
   List<BookModel> get _visibleBooks {
@@ -58,7 +70,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
     try {
       final books = await scan();
       if (!mounted) return;
-      if (books != null) setState(() => _books = books);
+      if (books != null) {
+        setState(() {
+          _books = books;
+          _readingProgress.clear();
+        });
+        await _loadProgress(books);
+      }
     } on BookScannerException catch (error) {
       if (!mounted) return;
       setState(() => _errorMessage = error.message);
@@ -71,8 +89,55 @@ class _LibraryScreenState extends State<LibraryScreen> {
         () => _errorMessage =
             'Ошибка доступа к файлам: ${error.message ?? error.code}',
       );
+    } on FormatException catch (error) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'Не удалось загрузить прогресс чтения: $error');
     } finally {
       if (mounted) setState(() => _isScanning = false);
+    }
+  }
+
+  Future<void> _loadProgress(Iterable<BookModel> books) async {
+    final results = await Future.wait(
+      books.map(
+        (book) async => MapEntry(
+          book.path,
+          await _progressStore.load(book.path),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    setState(() {
+      for (final result in results) {
+        if (result.value != null) {
+          _readingProgress[result.key] = result.value!;
+        }
+      }
+    });
+  }
+
+  Future<void> _openBook(BookModel book) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => BookReaderScreen(
+          book: book,
+          progressStore: _progressStore,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    try {
+      final progress = await _progressStore.load(book.path);
+      if (!mounted) return;
+      setState(() {
+        if (progress == null) {
+          _readingProgress.remove(book.path);
+        } else {
+          _readingProgress[book.path] = progress;
+        }
+      });
+    } on FormatException catch (error) {
+      setState(() => _errorMessage = 'Не удалось прочитать прогресс: $error');
     }
   }
 
@@ -272,7 +337,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   separatorBuilder: (context, index) =>
                       const Divider(height: 1, indent: 72),
                   itemBuilder: (context, index) =>
-                      _BookTile(book: visibleBooks[index]),
+                      _BookTile(
+                        book: visibleBooks[index],
+                        progress: _readingProgress[visibleBooks[index].path],
+                        onTap: () => _openBook(visibleBooks[index]),
+                      ),
                 ),
               )
             else
@@ -303,7 +372,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
             separatorBuilder: (context, index) =>
                 const Divider(height: 1, indent: 72),
             itemBuilder: (context, index) =>
-                _BookTile(book: regularBooks[index]),
+                _BookTile(
+                  book: regularBooks[index],
+                  progress: _readingProgress[regularBooks[index].path],
+                  onTap: () => _openBook(regularBooks[index]),
+                ),
           ),
         ),
       );
@@ -336,6 +409,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       name: _directoryName(directory),
                       path: directory,
                       chapters: chapters,
+                      readingProgress: _readingProgress,
+                      onOpenBook: _openBook,
                     ),
                   ),
                 ),
@@ -427,11 +502,15 @@ class _MangaFolderScreen extends StatelessWidget {
     required this.name,
     required this.path,
     required this.chapters,
+    required this.readingProgress,
+    required this.onOpenBook,
   });
 
   final String name;
   final String path;
   final List<BookModel> chapters;
+  final Map<String, BookReadingProgress> readingProgress;
+  final ValueChanged<BookModel> onOpenBook;
 
   @override
   Widget build(BuildContext context) {
@@ -459,13 +538,8 @@ class _MangaFolderScreen extends StatelessWidget {
                   final chapter = chapters[index];
                   return _BookTile(
                     book: chapter,
-                    onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Просмотр содержимого главы пока не реализован.',
-                        ),
-                      ),
-                    ),
+                    progress: readingProgress[chapter.path],
+                    onTap: () => onOpenBook(chapter),
                   );
                 },
               ),
@@ -478,9 +552,14 @@ class _MangaFolderScreen extends StatelessWidget {
 }
 
 class _BookTile extends StatelessWidget {
-  const _BookTile({required this.book, this.onTap});
+  const _BookTile({
+    required this.book,
+    this.progress,
+    this.onTap,
+  });
 
   final BookModel book;
+  final BookReadingProgress? progress;
   final VoidCallback? onTap;
 
   @override
@@ -508,11 +587,16 @@ class _BookTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: Text(
-        '${book.extension.substring(1).toUpperCase()} · ${_formatSize(book.size)}\n${book.path}',
-        maxLines: 2,
+        [
+          '${book.extension.substring(1).toUpperCase()} · ${_formatSize(book.size)}',
+          if (progress != null)
+            '${progress!.percentRead}% · ${progress!.currentPage} из ${progress!.totalPages} стр.',
+          book.path,
+        ].join('\n'),
+        maxLines: 3,
         overflow: TextOverflow.ellipsis,
       ),
-      isThreeLine: true,
+      isThreeLine: progress != null,
     );
   }
 

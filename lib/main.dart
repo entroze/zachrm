@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 
 import 'screens/library_screen.dart';
+import 'services/reading_progress_service.dart';
 
 void main() {
   runApp(const LumenApp());
 }
 
 class LumenApp extends StatelessWidget {
-  const LumenApp({super.key});
+  const LumenApp({super.key, this.progressStore});
+
+  final ReadingProgressStore? progressStore;
 
   // This widget is the root of your application.
   @override
@@ -44,7 +47,7 @@ class LumenApp extends StatelessWidget {
         ),
         dividerColor: Colors.white12,
       ),
-      home: const LibraryScreen(),
+      home: LibraryScreen(progressStore: progressStore),
     );
   }
 }

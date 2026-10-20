@@ -9,15 +9,40 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:zachrm/models/book_model.dart';
+import 'package:zachrm/models/book_reading_progress.dart';
 import 'package:zachrm/main.dart';
+import 'package:zachrm/screens/book_reader_screen.dart';
 import 'package:zachrm/screens/library_screen.dart';
+import 'package:zachrm/services/book_document_service.dart';
 import 'package:zachrm/services/book_scanner_service.dart';
+import 'package:zachrm/services/reading_progress_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test(
+    'shared preferences progress store saves and reloads the legacy API',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final preferences = await SharedPreferences.getInstance();
+      final store = SharedPreferencesReadingProgressStore(
+        preferences: preferences,
+      );
+      const progress = BookReadingProgress(currentPage: 12, totalPages: 80);
+
+      await store.save('/books/novel.fb2', progress);
+
+      final restored = await store.load('/books/novel.fb2');
+      expect(restored?.currentPage, progress.currentPage);
+      expect(restored?.totalPages, progress.totalPages);
+    },
+  );
+
   testWidgets('library shows controls for scanning local books', (
     tester,
   ) async {
-    await tester.pumpWidget(const LumenApp());
+    await tester.pumpWidget(
+      LumenApp(progressStore: _MemoryReadingProgressStore()),
+    );
     await tester.pumpAndSettle();
 
     expect(
@@ -37,7 +62,10 @@ void main() {
   testWidgets('library displays books returned by the scanner', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: LibraryScreen(scannerService: _FakeBookScannerService()),
+        home: LibraryScreen(
+          scannerService: _FakeBookScannerService(),
+          progressStore: _MemoryReadingProgressStore(),
+        ),
       ),
     );
     await tester.tap(find.text('Сканировать'));
@@ -51,7 +79,12 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      MaterialApp(home: LibraryScreen(scannerService: _FakeMangaScannerService())),
+      MaterialApp(
+        home: LibraryScreen(
+          scannerService: _FakeMangaScannerService(),
+          progressStore: _MemoryReadingProgressStore(),
+        ),
+      ),
     );
     await tester.tap(find.text('Сканировать'));
     await tester.pumpAndSettle();
@@ -64,6 +97,35 @@ void main() {
     final chapter2 = tester.getTopLeft(find.text('Chapter 2')).dy;
     final chapter10 = tester.getTopLeft(find.text('Chapter 10')).dy;
     expect(chapter2, lessThan(chapter10));
+  });
+
+  testWidgets('text reader paginates by font size and persists page progress', (
+    tester,
+  ) async {
+    final progressStore = _MemoryReadingProgressStore();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BookReaderScreen(
+          book: const BookModel(
+            path: '/books/novel.fb2',
+            title: 'Novel',
+            extension: '.fb2',
+            size: 500,
+          ),
+          progressStore: progressStore,
+          documentService: _LongTextBookDocumentService(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('1 из '), findsOneWidget);
+    await tester.tap(find.byTooltip('Следующая страница'));
+    await tester.pumpAndSettle();
+
+    expect(progressStore.saved?.currentPage, 2);
+    expect(progressStore.saved?.totalPages, greaterThan(1));
+    expect(find.textContaining('2 из '), findsOneWidget);
   });
 }
 
@@ -101,4 +163,26 @@ class _FakeMangaScannerService extends BookScannerService {
       size: 10,
     ),
   ];
+}
+
+class _MemoryReadingProgressStore implements ReadingProgressStore {
+  final values = <String, BookReadingProgress>{};
+
+  BookReadingProgress? get saved => values['/books/novel.fb2'];
+
+  @override
+  Future<BookReadingProgress?> load(String bookPath) async => values[bookPath];
+
+  @override
+  Future<void> save(String bookPath, BookReadingProgress progress) async {
+    values[bookPath] = progress;
+  }
+}
+
+class _LongTextBookDocumentService extends BookDocumentService {
+  @override
+  Future<String> loadText(BookModel book) async => List.filled(
+    240,
+    'Это тестовая строка книги для проверки разбиения на страницы.',
+  ).join('\n\n');
 }

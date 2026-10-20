@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:zachrm/models/book_model.dart';
+import 'package:zachrm/services/book_document_service.dart';
 import 'package:zachrm/services/book_scanner_service.dart';
 
 void main() {
@@ -74,4 +76,28 @@ void main() {
       ]);
     },
   );
+
+  test('extracts FB2 paragraphs for the text reader', () async {
+    final file = File(
+      '${temporaryDirectory.path}${Platform.pathSeparator}novel.fb2',
+    );
+    await file.writeAsString(
+      '<?xml version="1.0" encoding="UTF-8"?>'
+      '<FictionBook><body><section><title><p>Глава первая</p></title>'
+      '<p>Текст первой главы.</p><p>Следующий абзац.</p>'
+      '</section></body></FictionBook>',
+    );
+    final text = await BookDocumentService().loadText(
+      BookModel(
+        path: file.path,
+        title: 'novel',
+        extension: '.fb2',
+        size: await file.length(),
+      ),
+    );
+
+    expect(text, contains('Глава первая'));
+    expect(text, contains('Текст первой главы.'));
+    expect(text, contains('Следующий абзац.'));
+  });
 }
