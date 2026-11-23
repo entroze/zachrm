@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:koni_archive/io.dart';
 import 'package:xml/xml.dart';
 
@@ -18,27 +19,63 @@ class BookDocumentException implements Exception {
 class BookDocumentService {
   Future<String> loadText(BookModel book) async {
     try {
+      final bytes = await _readFileBytes(book);
+
       if (book.extension == '.fb2') {
-        final xml = XmlDocument.parse(
-          utf8.decode(await File(book.path).readAsBytes(), allowMalformed: true),
-        );
+        final xml = XmlDocument.parse(utf8.decode(bytes, allowMalformed: true));
         return _extractText(xml);
       }
-      if (book.extension == '.epub') return await _loadEpub(book.path);
+      if (book.extension == '.epub') return await _loadEpub(book.path, bytes);
       throw BookDocumentException(
         'Текстовый просмотр не поддерживает ${book.extension}.',
       );
     } on FileSystemException catch (error) {
-      throw BookDocumentException('Не удалось прочитать файл: ${error.message}');
+      throw BookDocumentException(
+        'Не удалось прочитать файл: ${error.message}',
+      );
     } on FormatException catch (error) {
-      throw BookDocumentException('Файл книги повреждён или имеет неверный формат: $error');
+      throw BookDocumentException(
+        'Файл книги повреждён или имеет неверный формат: $error',
+      );
     } on ArchiveException catch (error) {
       throw BookDocumentException('Не удалось прочитать архив книги: $error');
+    } on PlatformException catch (error) {
+      throw BookDocumentException(
+        'Ошибка доступа к файлу: ${error.message ?? error.code}',
+      );
     }
   }
 
-  Future<String> _loadEpub(String path) async {
-    final archive = await openArchiveFile(path);
+  Future<Uint8List> _readFileBytes(BookModel book) async {
+    if (book.isAndroidContentUri) {
+      if (book.extension == '.epub' ||
+          book.extension == '.cbz' ||
+          book.extension == '.cbr') {
+        final file = File(book.path);
+        if (await file.exists()) {
+          return await file.readAsBytes();
+        }
+      }
+      try {
+        final uri = Uri.parse(book.path);
+        final data = await File(book.path).readAsBytes();
+        return data;
+      } catch (e) {
+        throw BookDocumentException(
+          'Не удалось прочитать файл через content URI: $e',
+        );
+      }
+    }
+
+    final file = File(book.path);
+    if (!await file.exists()) {
+      throw BookDocumentException('Файл не найден: ${book.path}');
+    }
+    return await file.readAsBytes();
+  }
+
+  Future<String> _loadEpub(String path, Uint8List epubBytes) async {
+    final archive = await openArchiveBytes(epubBytes);
     try {
       final containerEntry = archive.entry('META-INF/container.xml');
       if (containerEntry == null) {
@@ -108,8 +145,7 @@ class BookDocumentService {
   }
 
   String _extractText(XmlNode node) {
-    final blocks = node
-        .descendants
+    final blocks = node.descendants
         .whereType<XmlElement>()
         .where(
           (element) => const {

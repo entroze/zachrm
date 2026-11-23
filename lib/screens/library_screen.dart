@@ -9,14 +9,10 @@ import '../services/reading_progress_service.dart';
 import '../services/book_scanner_service.dart';
 import 'book_reader_screen.dart';
 
-enum _LibraryFilter { all, books, comics }
+enum _LibraryFilter { all, books, comics, images }
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({
-    super.key,
-    this.scannerService,
-    this.progressStore,
-  });
+  const LibraryScreen({super.key, this.scannerService, this.progressStore});
 
   final BookScannerService? scannerService;
   final ReadingProgressStore? progressStore;
@@ -46,11 +42,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<BookModel> get _visibleBooks {
     final normalizedQuery = _query.trim().toLowerCase();
     return _books.where((book) {
-      final isComic = book.extension == '.cbz' || book.extension == '.cbr';
       final matchesFilter = switch (_filter) {
         _LibraryFilter.all => true,
-        _LibraryFilter.books => !isComic,
-        _LibraryFilter.comics => isComic,
+        _LibraryFilter.books => !book.isComicArchive && !book.isImageFile,
+        _LibraryFilter.comics => book.isComicArchive,
+        _LibraryFilter.images => book.isImageFile,
       };
       final matchesQuery =
           normalizedQuery.isEmpty ||
@@ -89,9 +85,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
         () => _errorMessage =
             'Ошибка доступа к файлам: ${error.message ?? error.code}',
       );
-    } on FormatException catch (error) {
+    } on FormatException {
       if (!mounted) return;
-      setState(() => _errorMessage = 'Не удалось загрузить прогресс чтения: $error');
+      setState(() => _errorMessage = 'Не удалось загрузить прогресс чтения');
     } finally {
       if (mounted) setState(() => _isScanning = false);
     }
@@ -100,10 +96,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Future<void> _loadProgress(Iterable<BookModel> books) async {
     final results = await Future.wait(
       books.map(
-        (book) async => MapEntry(
-          book.path,
-          await _progressStore.load(book.path),
-        ),
+        (book) async =>
+            MapEntry(book.path, await _progressStore.load(book.path)),
       ),
     );
     if (!mounted) return;
@@ -119,10 +113,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Future<void> _openBook(BookModel book) async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => BookReaderScreen(
-          book: book,
-          progressStore: _progressStore,
-        ),
+        builder: (_) =>
+            BookReaderScreen(book: book, progressStore: _progressStore),
       ),
     );
     if (!mounted) return;
@@ -136,8 +128,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
           _readingProgress[book.path] = progress;
         }
       });
-    } on FormatException catch (error) {
-      setState(() => _errorMessage = 'Не удалось прочитать прогресс: $error');
+    } on FormatException {
+      setState(() => _errorMessage = 'Не удалось прочитать прогресс');
     }
   }
 
@@ -214,7 +206,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     ),
                     const SizedBox(height: 7),
                     Text(
-                      'PDF, EPUB, FB2, CBZ и CBR на вашем устройстве',
+                      'PDF, EPUB, FB2, CBZ, CBR, ZIP и изображения на вашем устройстве',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -292,6 +284,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           value: _LibraryFilter.comics,
                           label: Text('Комиксы'),
                         ),
+                        ButtonSegment(
+                          value: _LibraryFilter.images,
+                          label: Text('Изображения'),
+                        ),
                       ],
                       selected: {_filter},
                       onSelectionChanged: (selection) =>
@@ -329,19 +325,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   ),
                 ),
               )
-            else if (_filter == _LibraryFilter.books)
+            else if (_filter == _LibraryFilter.books ||
+                _filter == _LibraryFilter.images)
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
                 sliver: SliverList.separated(
                   itemCount: visibleBooks.length,
                   separatorBuilder: (context, index) =>
                       const Divider(height: 1, indent: 72),
-                  itemBuilder: (context, index) =>
-                      _BookTile(
-                        book: visibleBooks[index],
-                        progress: _readingProgress[visibleBooks[index].path],
-                        onTap: () => _openBook(visibleBooks[index]),
-                      ),
+                  itemBuilder: (context, index) => _BookTile(
+                    book: visibleBooks[index],
+                    progress: _readingProgress[visibleBooks[index].path],
+                    onTap: () => _openBook(visibleBooks[index]),
+                  ),
                 ),
               )
             else
@@ -356,10 +352,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final regularBooks = books.where((book) => !_isComic(book)).toList();
     final comicsByDirectory = <String, List<BookModel>>{};
     for (final book in books.where(_isComic)) {
-      comicsByDirectory.putIfAbsent(
-        File(book.path).parent.path,
-        () => [],
-      ).add(book);
+      comicsByDirectory
+          .putIfAbsent(File(book.path).parent.path, () => [])
+          .add(book);
     }
 
     final sections = <Widget>[];
@@ -371,22 +366,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
             itemCount: regularBooks.length,
             separatorBuilder: (context, index) =>
                 const Divider(height: 1, indent: 72),
-            itemBuilder: (context, index) =>
-                _BookTile(
-                  book: regularBooks[index],
-                  progress: _readingProgress[regularBooks[index].path],
-                  onTap: () => _openBook(regularBooks[index]),
-                ),
+            itemBuilder: (context, index) => _BookTile(
+              book: regularBooks[index],
+              progress: _readingProgress[regularBooks[index].path],
+              onTap: () => _openBook(regularBooks[index]),
+            ),
           ),
         ),
       );
     }
 
     final directories = comicsByDirectory.keys.toList()
-      ..sort((first, second) =>
-          _directoryName(first).toLowerCase().compareTo(
-            _directoryName(second).toLowerCase(),
-          ));
+      ..sort(
+        (first, second) =>
+            _directoryName(first)
+                .toLowerCase()
+                .compareTo(_directoryName(second).toLowerCase()),
+      );
     if (directories.isNotEmpty) {
       sections.add(
         SliverPadding(
@@ -424,8 +420,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return sections;
   }
 
-  static bool _isComic(BookModel book) =>
-      book.extension == '.cbz' || book.extension == '.cbr';
+  static bool _isComic(BookModel book) => book.isComicArchive;
 
   static String _directoryName(String path) {
     final segments = path
@@ -447,8 +442,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
         .map((match) => match.group(0)!)
         .toList();
 
-    for (var index = 0; index < firstParts.length && index < secondParts.length;
-        index++) {
+    for (
+      var index = 0;
+      index < firstParts.length && index < secondParts.length;
+      index++
+    ) {
       final firstPart = firstParts[index];
       final secondPart = secondParts[index];
       final firstIsNumber = RegExp(r'^\d+$').hasMatch(firstPart);
@@ -552,11 +550,7 @@ class _MangaFolderScreen extends StatelessWidget {
 }
 
 class _BookTile extends StatelessWidget {
-  const _BookTile({
-    required this.book,
-    this.progress,
-    this.onTap,
-  });
+  const _BookTile({required this.book, this.progress, this.onTap});
 
   final BookModel book;
   final BookReadingProgress? progress;
@@ -565,7 +559,13 @@ class _BookTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isComic = book.extension == '.cbz' || book.extension == '.cbr';
+    final isComic = book.isComicArchive;
+    final isImage = book.isImageFile;
+    final icon = isComic
+        ? Icons.auto_awesome_mosaic_rounded
+        : isImage
+        ? Icons.image_rounded
+        : Icons.menu_book_rounded;
     return ListTile(
       onTap: onTap,
       contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
@@ -576,16 +576,9 @@ class _BookTile extends StatelessWidget {
           color: theme.colorScheme.primaryContainer,
           borderRadius: BorderRadius.circular(7),
         ),
-        child: Icon(
-          isComic ? Icons.auto_awesome_mosaic_rounded : Icons.menu_book_rounded,
-          color: theme.colorScheme.onPrimaryContainer,
-        ),
+        child: Icon(icon, color: theme.colorScheme.onPrimaryContainer),
       ),
-      title: Text(
-        book.title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      title: Text(book.title, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(
         [
           '${book.extension.substring(1).toUpperCase()} · ${_formatSize(book.size)}',

@@ -74,6 +74,13 @@ void main() {
         fb2.path,
         epub.path,
       ]);
+      expect(books.map((book) => book.isContentUri), [
+        false,
+        false,
+        false,
+        false,
+        false,
+      ]);
     },
   );
 
@@ -93,6 +100,7 @@ void main() {
         title: 'novel',
         extension: '.fb2',
         size: await file.length(),
+        isContentUri: false,
       ),
     );
 

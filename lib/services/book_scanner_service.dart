@@ -28,12 +28,66 @@ class BookScannerService {
     '.fb2',
     '.cbz',
     '.cbr',
+    '.zip',
+  };
+
+  static const _imageExtensions = {
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.webp',
+    '.gif',
+    '.bmp',
   };
 
   Future<List<BookModel>> scanDefaultDirectories() async {
     await _requestStorageAccess();
 
     try {
+      if (Platform.isAndroid) {
+        final result = await FilePicker.platform.pickFiles(
+          type: FileType.custom,
+          allowMultiple: true,
+          allowedExtensions: [
+            'pdf',
+            'epub',
+            'fb2',
+            'cbz',
+            'cbr',
+            'zip',
+            'jpg',
+            'jpeg',
+            'png',
+            'webp',
+            'gif',
+            'bmp',
+          ],
+        );
+
+        if (result == null || result.files.isEmpty) {
+          return [];
+        }
+
+        return result.files
+            .map((file) {
+              final ext = '.${file.extension?.toLowerCase() ?? 'unknown'}';
+              return BookModel(
+                path: file.path ?? file.identifier ?? '',
+                title: file.name.replaceAll(RegExp(r'\.[^.]*$'), ''),
+                extension: ext,
+                size: file.size ?? 0,
+                isContentUri: file.path?.startsWith('content://') ?? false,
+                isImageFolder: _imageExtensions.contains(ext),
+              );
+            })
+            .where(
+              (book) =>
+                  _supportedExtensions.contains(book.extension) ||
+                  book.isImageFolder,
+            )
+            .toList();
+      }
+
       final externalFiles = await getExternalStorageDirectory();
       if (externalFiles == null) {
         throw const BookScannerException(
@@ -46,7 +100,6 @@ class BookScannerService {
       for (var level = 0; level < 4; level++) {
         storageRoot = storageRoot.parent;
       }
-
       return await _scanDirectories([
         Directory('${storageRoot.path}${Platform.pathSeparator}Download'),
         Directory('${storageRoot.path}${Platform.pathSeparator}Downloads'),
@@ -68,6 +121,49 @@ class BookScannerService {
     await _requestStorageAccess();
 
     try {
+      if (Platform.isAndroid) {
+        final result = await FilePicker.platform.pickFiles(
+          type: FileType.custom,
+          allowMultiple: true,
+          allowedExtensions: [
+            'pdf',
+            'epub',
+            'fb2',
+            'cbz',
+            'cbr',
+            'zip',
+            'jpg',
+            'jpeg',
+            'png',
+            'webp',
+            'gif',
+            'bmp',
+          ],
+          dialogTitle: 'Выберите файлы книг',
+        );
+
+        if (result == null) return null;
+
+        return result.files
+            .map((file) {
+              final ext = '.${file.extension?.toLowerCase() ?? 'unknown'}';
+              return BookModel(
+                path: file.path ?? file.identifier ?? '',
+                title: file.name.replaceAll(RegExp(r'\.[^.]*$'), ''),
+                extension: ext,
+                size: file.size ?? 0,
+                isContentUri: file.path?.startsWith('content://') ?? false,
+                isImageFolder: _imageExtensions.contains(ext),
+              );
+            })
+            .where(
+              (book) =>
+                  _supportedExtensions.contains(book.extension) ||
+                  book.isImageFolder,
+            )
+            .toList();
+      }
+
       final selectedPath = await FilePicker.getDirectoryPath(
         dialogTitle: 'Выберите папку с книгами',
       );
@@ -100,17 +196,21 @@ class BookScannerService {
 
     try {
       final androidInfo = await DeviceInfoPlugin().androidInfo;
-      final status = androidInfo.version.sdkInt >= 30
-          ? await Permission.manageExternalStorage.request()
-          : await Permission.storage.request();
 
-      if (!status.isGranted) {
-        final settingsHint = status.isPermanentlyDenied
-            ? ' Включите доступ в настройках приложения.'
-            : '';
-        throw BookAccessDeniedException(
-          'Нет разрешения на доступ к файлам.$settingsHint',
-        );
+      if (androidInfo.version.sdkInt >= 30) {
+        final status = await Permission.storage.request();
+        if (!status.isGranted) {
+          throw BookAccessDeniedException(
+            'Необходимо разрешение на доступ к файлам. Включите его в настройках приложения.',
+          );
+        }
+      } else {
+        final status = await Permission.storage.request();
+        if (!status.isGranted) {
+          throw BookAccessDeniedException(
+            'Необходимо разрешение на доступ к файлам.',
+          );
+        }
       }
     } on PlatformException catch (error) {
       throw BookScannerException(
@@ -136,7 +236,9 @@ class BookScannerService {
         final extensionStart = fileName.lastIndexOf('.');
         if (extensionStart < 0) continue;
         final extension = fileName.substring(extensionStart).toLowerCase();
-        if (!_supportedExtensions.contains(extension)) continue;
+        if (!_supportedExtensions.contains(extension) &&
+            !_imageExtensions.contains(extension))
+          continue;
 
         final stat = await entity.stat();
         if (stat.type != FileSystemEntityType.file) continue;
@@ -149,14 +251,17 @@ class BookScannerService {
           title: fileName.substring(0, extensionStart),
           extension: extension,
           size: stat.size,
+          isContentUri: false,
+          isImageFolder: _imageExtensions.contains(extension),
         );
       }
     }
 
     final books = booksByPath.values.toList()
-      ..sort((first, second) => first.title.toLowerCase().compareTo(
-        second.title.toLowerCase(),
-      ));
+      ..sort(
+        (first, second) =>
+            first.title.toLowerCase().compareTo(second.title.toLowerCase()),
+      );
     return books;
   }
 }
